@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { cors } from 'hono/cors'
+import { userRepository } from './db.js'
 
 const app = new Hono()
 
@@ -34,21 +35,37 @@ api.get('/hello', (c) => {
   return c.json({ message: 'Hello from API v1!' })
 })
 
-api.get('/users', (c) => {
-  // サンプルユーザーデータ
-  const users = [
-    { id: 1, name: 'Alice', email: 'alice@example.com' },
-    { id: 2, name: 'Bob', email: 'bob@example.com' }
-  ]
-  return c.json({ users })
+api.get('/users', async (c) => {
+  try {
+    const users = await userRepository.getAllUsers()
+    return c.json({ users })
+  } catch (error: any) {
+    console.error('Error fetching users:', error)
+    return c.json({ error: 'Failed to fetch users' }, 500)
+  }
 })
 
 api.post('/users', async (c) => {
-  const body = await c.req.json()
-  return c.json({
-    message: 'User created',
-    user: { id: Date.now(), ...body }
-  }, 201)
+  try {
+    const body = await c.req.json()
+    const { name, email } = body
+
+    if (!name || !email) {
+      return c.json({ error: 'Name and email are required' }, 400)
+    }
+
+    const user = await userRepository.createUser(name, email)
+    return c.json({
+      message: 'User created',
+      user
+    }, 201)
+  } catch (error: any) {
+    console.error('Error creating user:', error)
+    if (error.code === 'UNIQUE_VIOLATION') {
+      return c.json({ error: 'Email already exists' }, 409)
+    }
+    return c.json({ error: 'Failed to create user' }, 500)
+  }
 })
 
 // APIルートをマウント
@@ -56,10 +73,9 @@ app.route('/api/v1', api)
 
 // サーバー起動
 const port = 3002
-console.log(`🚀 Hono server is running on http://localhost:${port}`)
 
 serve({
   fetch: app.fetch,
   port,
   hostname: '0.0.0.0'
-}) 
+})    

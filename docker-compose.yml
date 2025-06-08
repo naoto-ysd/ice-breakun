@@ -19,11 +19,17 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "3002:3002"
+
+    environment:
+      - NODE_ENV=development
+      - DATABASE_PATH=/app/data/ice_breakun.db
     volumes:
       - ./server:/app/server
       - ./package.json:/app/package.json
       - ./yarn.lock:/app/yarn.lock
       - ./tsconfig.json:/app/tsconfig.json
       - /app/node_modules
-    environment:
-      - NODE_ENV=development
+      - sqlite_data:/app/data
+
+volumes:
+  sqlite_data:
