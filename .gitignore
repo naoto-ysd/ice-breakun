@@ -22,3 +22,8 @@ logs
 .env
 .env.*
 !.env.example
+
+/generated/prisma
+
+# SQLite DB（Prisma）
+prisma/data/ice_breakun.db
