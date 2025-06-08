@@ -6,7 +6,7 @@ const app = new Hono()
 
 // CORS設定
 app.use('*', cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002'],
+  origin: ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://host.docker.internal:3000'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowHeaders: ['Content-Type', 'Authorization'],
 }))
@@ -60,5 +60,6 @@ console.log(`🚀 Hono server is running on http://localhost:${port}`)
 
 serve({
   fetch: app.fetch,
-  port
+  port,
+  hostname: '0.0.0.0'
 }) 
