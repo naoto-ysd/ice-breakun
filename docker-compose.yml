@@ -10,3 +10,20 @@ services:
     environment:
       - NUXT_HOST=0.0.0.0
       - NUXT_PORT=3000
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./server:/app/server
+      - ./package.json:/app/package.json
+      - ./yarn.lock:/app/yarn.lock
+      - ./tsconfig.json:/app/tsconfig.json
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
