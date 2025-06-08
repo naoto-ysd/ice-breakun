@@ -1,7 +1,6 @@
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { cors } from 'hono/cors'
-
 import { userRepository } from './db.js'
 
 const app = new Hono()
@@ -50,11 +49,11 @@ api.post('/users', async (c) => {
   try {
     const body = await c.req.json()
     const { name, email } = body
-    
+
     if (!name || !email) {
       return c.json({ error: 'Name and email are required' }, 400)
     }
-    
+
     const user = await userRepository.createUser(name, email)
     return c.json({
       message: 'User created',
@@ -131,4 +130,4 @@ try {
 } catch (error) {
   console.error('Failed to start server:', error)
   process.exit(1)
-}      
+}   
