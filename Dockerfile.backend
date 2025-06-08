@@ -2,14 +2,24 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Install dependencies first (better caching)
 COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
+RUN yarn install --frozen-lockfile && yarn cache clean
 
+# Copy application files
 COPY server/ ./server/
 COPY prisma/ ./prisma/
 COPY tsconfig.json ./
 
+# Set environment variable for Prisma
+ENV DATABASE_URL="file:/app/prisma/data/ice_breakun.db"
+
+# Generate Prisma client and run migrations
 RUN npx prisma generate
+RUN npx prisma db push
+
+# Clean up unnecessary files
+RUN rm -rf /tmp/* /var/cache/apk/* /root/.cache
 
 EXPOSE 3002
 

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { cors } from 'hono/cors'
-import { userRepository } from './db.js'
+import { userRepository } from './db'
 
 const app = new Hono()
 
@@ -73,15 +73,15 @@ api.put('/users/:id', async (c) => {
     const id = parseInt(c.req.param('id'))
     const body = await c.req.json()
     const { name, email } = body
-    
+
     if (!name && !email) {
       return c.json({ error: 'At least one field (name or email) is required' }, 400)
     }
-    
+
     const updateData: { name?: string; email?: string } = {}
     if (name) updateData.name = name
     if (email) updateData.email = email
-    
+
     const user = await userRepository.updateUser(id, updateData)
     return c.json({
       message: 'User updated',
