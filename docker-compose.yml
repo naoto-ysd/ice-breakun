@@ -22,7 +22,7 @@ services:
 
     environment:
       - NODE_ENV=development
-      - DATABASE_PATH=/app/data/ice_breakun.db
+      - DATABASE_URL=file:/app/data/ice_breakun.db
     volumes:
       - ./server:/app/server
       - ./package.json:/app/package.json

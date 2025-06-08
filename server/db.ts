@@ -1,34 +1,6 @@
-import Database from 'better-sqlite3'
-import { existsSync, mkdirSync } from 'fs'
-import { dirname } from 'path'
+import { PrismaClient } from '@prisma/client'
 
-const dbPath = process.env.DATABASE_PATH || './data/ice_breakun.db'
-const dbDir = dirname(dbPath)
-
-if (!existsSync(dbDir)) {
-  mkdirSync(dbDir, { recursive: true })
-}
-
-const db = new Database(dbPath)
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`)
-
-const insertSampleData = db.prepare(`
-  INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)
-`)
-
-insertSampleData.run('Alice', 'alice@example.com')
-insertSampleData.run('Bob', 'bob@example.com')
-insertSampleData.run('Charlie', 'charlie@example.com')
-insertSampleData.run('Diana', 'diana@example.com')
+const prisma = new PrismaClient()
 
 export interface User {
   id: number
@@ -39,19 +11,19 @@ export interface User {
 }
 
 export class UserRepository {
-  private getAllStmt = db.prepare('SELECT * FROM users ORDER BY id')
-  private createStmt = db.prepare('INSERT INTO users (name, email) VALUES (?, ?) RETURNING *')
-  private getByIdStmt = db.prepare('SELECT * FROM users WHERE id = ?')
-
   async getAllUsers(): Promise<User[]> {
-    return this.getAllStmt.all() as User[]
+    return await prisma.user.findMany({
+      orderBy: { id: 'asc' }
+    })
   }
 
   async createUser(name: string, email: string): Promise<User> {
     try {
-      return this.createStmt.get(name, email) as User
+      return await prisma.user.create({
+        data: { name, email }
+      })
     } catch (error: any) {
-      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      if (error.code === 'P2002') {
         const err = new Error('Email already exists')
         ;(err as any).code = 'UNIQUE_VIOLATION'
         throw err
@@ -61,7 +33,45 @@ export class UserRepository {
   }
 
   async getUserById(id: number): Promise<User | null> {
-    return this.getByIdStmt.get(id) as User || null
+    return await prisma.user.findUnique({
+      where: { id }
+    })
+  }
+
+  async updateUser(id: number, data: { name?: string; email?: string }): Promise<User> {
+    try {
+      return await prisma.user.update({
+        where: { id },
+        data
+      })
+    } catch (error: any) {
+      if (error.code === 'P2002') {
+        const err = new Error('Email already exists')
+        ;(err as any).code = 'UNIQUE_VIOLATION'
+        throw err
+      }
+      if (error.code === 'P2025') {
+        const err = new Error('User not found')
+        ;(err as any).code = 'NOT_FOUND'
+        throw err
+      }
+      throw error
+    }
+  }
+
+  async deleteUser(id: number): Promise<void> {
+    try {
+      await prisma.user.delete({
+        where: { id }
+      })
+    } catch (error: any) {
+      if (error.code === 'P2025') {
+        const err = new Error('User not found')
+        ;(err as any).code = 'NOT_FOUND'
+        throw err
+      }
+      throw error
+    }
   }
 }
 

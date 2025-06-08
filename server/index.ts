@@ -69,6 +69,51 @@ api.post('/users', async (c) => {
   }
 })
 
+api.put('/users/:id', async (c) => {
+  try {
+    const id = parseInt(c.req.param('id'))
+    const body = await c.req.json()
+    const { name, email } = body
+    
+    if (!name && !email) {
+      return c.json({ error: 'At least one field (name or email) is required' }, 400)
+    }
+    
+    const updateData: { name?: string; email?: string } = {}
+    if (name) updateData.name = name
+    if (email) updateData.email = email
+    
+    const user = await userRepository.updateUser(id, updateData)
+    return c.json({
+      message: 'User updated',
+      user
+    })
+  } catch (error: any) {
+    console.error('Error updating user:', error)
+    if (error.code === 'UNIQUE_VIOLATION') {
+      return c.json({ error: 'Email already exists' }, 409)
+    }
+    if (error.code === 'NOT_FOUND') {
+      return c.json({ error: 'User not found' }, 404)
+    }
+    return c.json({ error: 'Failed to update user' }, 500)
+  }
+})
+
+api.delete('/users/:id', async (c) => {
+  try {
+    const id = parseInt(c.req.param('id'))
+    await userRepository.deleteUser(id)
+    return c.json({ message: 'User deleted' })
+  } catch (error: any) {
+    console.error('Error deleting user:', error)
+    if (error.code === 'NOT_FOUND') {
+      return c.json({ error: 'User not found' }, 404)
+    }
+    return c.json({ error: 'Failed to delete user' }, 500)
+  }
+})
+
 // APIルートをマウント
 app.route('/api/v1', api)
 
@@ -86,4 +131,4 @@ try {
 } catch (error) {
   console.error('Failed to start server:', error)
   process.exit(1)
-}    
+}      

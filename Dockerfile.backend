@@ -6,8 +6,11 @@ COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile
 
 COPY server/ ./server/
+COPY prisma/ ./prisma/
 COPY tsconfig.json ./
+
+RUN npx prisma generate
 
 EXPOSE 3002
 
-CMD ["yarn", "server:dev"] 
+CMD ["yarn", "server:dev"]     
