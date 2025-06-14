@@ -1,0 +1,31 @@
+# プロダクション用フロントエンドDockerfile
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile --cache-folder .yarn/cache && yarn cache clean
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN yarn build
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+
+# 必要なファイルのみをコピー
+COPY --from=builder /app/.output /app/.output
+COPY --from=builder /app/nuxt.config.ts /app/nuxt.config.ts
+COPY --from=builder /app/package.json /app/package.json
+
+# ユーザーを追加してセキュリティを向上
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nuxtjs
+USER nuxtjs
+
+EXPOSE 3000
+
+ENV NUXT_HOST=0.0.0.0
+ENV NUXT_PORT=3000
+
+CMD ["node", ".output/server/index.mjs"] 
