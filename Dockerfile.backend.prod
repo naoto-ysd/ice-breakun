@@ -1,0 +1,47 @@
+# プロダクション用バックエンドDockerfile
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile --cache-folder .yarn/cache && yarn cache clean
+
+FROM node:20-alpine AS prisma-setup
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY prisma/ ./prisma/
+COPY package.json ./
+RUN npx prisma generate
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=prisma-setup /app/node_modules/.prisma ./node_modules/.prisma
+COPY server/ ./server/
+COPY tsconfig.json ./
+COPY package.json ./
+RUN npx tsc --build server/tsconfig.json || yarn server:build
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+
+# 必要なファイルのみをコピー
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=prisma-setup /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/server ./server
+COPY prisma/ ./prisma/
+COPY package.json ./
+
+# ユーザーを追加してセキュリティを向上
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 honojs
+
+# データベースのセットアップ
+ENV DATABASE_URL="file:/app/prisma/data/ice_breakun.db"
+RUN mkdir -p /app/prisma/data && chown -R honojs:nodejs /app/prisma/data
+USER honojs
+
+# データベースの初期化
+RUN npx prisma db push
+
+EXPOSE 3002
+
+CMD ["yarn", "server:build"] 

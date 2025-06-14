@@ -8,7 +8,7 @@
         <input 
           v-model="newUser.name" 
           placeholder="名前" 
-          required 
+          required
           class="form-input"
         />
         <input 

@@ -1,11 +1,14 @@
 services:
   ice-breakun:
-    build: .
+    build: 
+      context: .
+      target: dev
     ports:
       - "3000:3000"
     volumes:
       - .:/app
       - /app/node_modules
+      - /app/.yarn/cache
     environment:
       - NUXT_HOST=0.0.0.0
       - NUXT_PORT=3000
@@ -16,6 +19,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
+      target: runtime
     ports:
       - "3002:3002"
     environment:
