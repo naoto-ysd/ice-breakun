@@ -1,6 +1,10 @@
 <template>
   <div>
     <NuxtRouteAnnouncer />
-    <UserList />
+    <NuxtPage />
   </div>
 </template>
+
+<script setup lang="ts">
+// レイアウトファイルとして機能
+</script>
