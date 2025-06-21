@@ -1,26 +1,25 @@
-FROM node:20-alpine
-
+FROM node:20-alpine AS deps
 WORKDIR /app
-
-# Install dependencies first (better caching)
 COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile && yarn cache clean
+RUN yarn install --frozen-lockfile --cache-folder .yarn/cache && yarn cache clean
 
-# Copy application files
+FROM node:20-alpine AS prisma-setup
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY prisma/ ./prisma/
+COPY package.json ./
+ENV DATABASE_URL="file:/app/prisma/data/ice_breakun.db"
+RUN npx prisma generate
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=prisma-setup /app/node_modules/.prisma ./node_modules/.prisma
 COPY server/ ./server/
 COPY prisma/ ./prisma/
 COPY tsconfig.json ./
-
-# Set environment variable for Prisma
+COPY package.json ./
 ENV DATABASE_URL="file:/app/prisma/data/ice_breakun.db"
-
-# Generate Prisma client and run migrations
-RUN npx prisma generate
-RUN npx prisma db push
-
-# Clean up unnecessary files
-RUN rm -rf /tmp/* /var/cache/apk/* /root/.cache
-
+RUN npx prisma db push && rm -rf /tmp/* /var/cache/apk/* /root/.cache
 EXPOSE 3002
-
-CMD ["yarn", "server:dev"]     
+CMD ["yarn", "server:dev"]               
