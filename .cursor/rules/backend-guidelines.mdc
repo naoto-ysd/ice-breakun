@@ -1,0 +1,494 @@
+---
+alwaysApply: true
+---
+# Ice Breakun バックエンド開発ガイドライン
+
+## 🎯 概要
+Ice BreukunプロジェクトのバックエンドAPI開発におけるルールとベストプラクティスです。
+
+## 🏗️ 技術スタック
+- **フレームワーク**: Hono.js
+- **ランタイム**: Node.js
+- **データベース**: SQLite
+- **ORM**: Prisma
+- **言語**: TypeScript
+
+## 📋 API設計ルール
+
+### RESTful API原則
+- エンドポイントは`/api/v1/`で始める
+- HTTPメソッドを適切に使用する：
+  - `GET`: リソースの取得
+  - `POST`: リソースの作成
+  - `PUT`: リソースの完全更新
+  - `PATCH`: リソースの部分更新
+  - `DELETE`: リソースの削除
+
+### URL設計
+- リソース名は複数形を使用（例: `/api/v1/users`）
+- ネストしたリソースは適切に表現（例: `/api/v1/users/:id/messages`）
+- クエリパラメータでフィルタリングやページネーション（例: `?page=1&limit=10`）
+
+### HTTPステータスコード
+- `200 OK`: 成功（GET、PUT、PATCH）
+- `201 Created`: リソース作成成功（POST）
+- `204 No Content`: 成功かつレスポンスボディなし（DELETE）
+- `400 Bad Request`: 不正なリクエスト
+- `401 Unauthorized`: 認証が必要
+- `403 Forbidden`: 権限不足
+- `404 Not Found`: リソースが見つからない
+- `409 Conflict`: リソースの競合
+- `422 Unprocessable Entity`: バリデーションエラー
+- `500 Internal Server Error`: サーバー内部エラー
+
+## 🔧 実装ルール
+
+### ファイル構造
+```
+server/
+├── index.ts          # メインのHonoアプリケーション
+├── db.ts            # データベースヘルパー関数
+├── types/           # TypeScript型定義
+├── middleware/      # ミドルウェア関数
+├── routes/          # ルートハンドラー（必要に応じて分割）
+└── utils/           # ユーティリティ関数
+```
+
+### エンドポイント実装
+- `server/index.ts`にルートを定義
+- 各エンドポイントは明確な責任を持つ
+- 複雑なロジックは別関数に分離
+
+### データベース操作
+- 必ず`server/db.ts`のヘルパー関数を使用
+- Prismaクエリビルダーを使用してSQLインジェクションを防ぐ
+- 生のSQLクエリは避ける
+- トランザクションが必要な場合は適切に実装
+
+### エラーハンドリング
+```typescript
+// 統一されたエラーレスポンス形式
+interface ErrorResponse {
+  error: {
+    message: string;
+    code?: string;
+    details?: any;
+  };
+}
+
+// エラーハンドリング例
+try {
+  // データベース操作
+} catch (error) {
+  return c.json({
+    error: {
+      message: "Internal server error",
+      code: "DATABASE_ERROR"
+    }
+  }, 500);
+}
+```
+
+### バリデーション
+- 入力値は必ずバリデーションを実装
+- 型安全性を確保するためTypeScriptの型を活用
+- 必要に応じてバリデーションライブラリを使用
+
+## 🔒 セキュリティ
+
+### データベースセキュリティ
+- SQLインジェクション対策：Prismaクエリビルダーの使用
+- パスワードは適切にハッシュ化
+- 機密情報は環境変数で管理
+
+### API セキュリティ
+- CORS設定を適切に実装
+- レート制限の実装を検討
+- 入力値のサニタイゼーション
+- 適切な認証・認可の実装
+
+## ⚡ パフォーマンス
+
+### データベース最適化
+- N+1問題を避けるためincludeを適切に使用
+- インデックスの効果的な使用
+- 不要なデータの取得を避ける
+- ページネーションの実装
+
+### キャッシング
+- 頻繁にアクセスされるデータのキャッシング
+- 適切なキャッシュ無効化戦略
+- メモリリークの防止
+
+## 🧪 テスト
+
+バックエンドテストの詳細については、`.cursor/rules/test-guidelines.mdc`を参照してください。
+
+## 📝 コーディング規約
+
+### TypeScript
+```typescript
+// 型定義の例
+interface User {
+  id: number;
+  name: string;
+  email: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// API レスポンス型の例
+interface ApiResponse<T> {
+  data: T;
+  message?: string;
+}
+
+// エラータイプの例
+interface ApiError {
+  error: {
+    message: string;
+    code?: string;
+  };
+}
+```
+
+### 命名規則
+- 関数名：camelCase（例: `getUserById`）
+- 変数名：camelCase（例: `userId`）
+- 定数：UPPER_SNAKE_CASE（例: `DEFAULT_PAGE_SIZE`）
+- インターフェース：PascalCase（例: `UserInterface`）
+
+### 関数設計
+- 単一責任の原則に従う
+- 純粋関数を優先
+- async/awaitを使用
+- エラーハンドリングを適切に実装
+
+## 🗃️ データベース
+
+### Prismaスキーマ
+- `prisma/schema.prisma`でモデル定義
+- 適切なリレーションシップの定義
+- インデックスの設定
+- デフォルト値の適切な設定
+
+### マイグレーション
+```bash
+# マイグレーション作成
+npx prisma migrate dev --name migration_name
+
+# 本番環境でのマイグレーション
+npx prisma migrate deploy
+```
+
+### クエリ最適化
+```typescript
+// 良い例：必要なフィールドのみ選択
+const user = await prisma.user.findUnique({
+  where: { id: userId },
+  select: {
+    id: true,
+    name: true,
+    email: true
+  }
+});
+
+// 悪い例：全フィールドを取得
+const user = await prisma.user.findUnique({
+  where: { id: userId }
+});
+```
+
+## 🔧 環境設定
+
+### 環境変数
+```env
+# データベース
+DATABASE_URL="file:./data/ice_breakun.db"
+
+# アプリケーション
+PORT=3001
+NODE_ENV=development
+
+# セキュリティ
+JWT_SECRET=your_jwt_secret_here
+```
+
+### 本番環境設定
+- 環境変数の適切な管理
+- ログレベルの設定
+- パフォーマンスモニタリング
+- ヘルスチェックエンドポイントの実装
+
+## 🚨 重要な注意事項
+
+1. **データベース変更**
+   - 必ずPrismaマイグレーションを使用
+   - スキーマ変更前にバックアップを取得
+
+2. **セキュリティ**
+   - 機密情報をコードにハードコードしない
+   - 入力値の検証を怠らない
+   - 適切なエラーメッセージでセンシティブな情報を隠す
+
+3. **パフォーマンス**
+   - データベースクエリの最適化
+   - メモリリークの防止
+   - 適切なログ出力
+
+4. **保守性**
+   - コードの可読性を重視
+   - 適切なコメントの追加
+   - 型安全性の確保
+
+## 📚 参考資料
+- [Hono.js Documentation](https://hono.dev/)
+- [Prisma Documentation](https://www.prisma.io/docs)
+- [TypeScript Handbook](https://www.typescriptlang.org/docs/)
+- [REST API Design Best Practices](https://restfulapi.net/)
+- [テスト開発ガイドライン](./.cursor/rules/test-guidelines.mdc) # Ice Breakun バックエンド開発ガイドライン
+
+## 🎯 概要
+Ice BreukunプロジェクトのバックエンドAPI開発におけるルールとベストプラクティスです。
+
+## 🏗️ 技術スタック
+- **フレームワーク**: Hono.js
+- **ランタイム**: Node.js
+- **データベース**: SQLite
+- **ORM**: Prisma
+- **言語**: TypeScript
+
+## 📋 API設計ルール
+
+### RESTful API原則
+- エンドポイントは`/api/v1/`で始める
+- HTTPメソッドを適切に使用する：
+  - `GET`: リソースの取得
+  - `POST`: リソースの作成
+  - `PUT`: リソースの完全更新
+  - `PATCH`: リソースの部分更新
+  - `DELETE`: リソースの削除
+
+### URL設計
+- リソース名は複数形を使用（例: `/api/v1/users`）
+- ネストしたリソースは適切に表現（例: `/api/v1/users/:id/messages`）
+- クエリパラメータでフィルタリングやページネーション（例: `?page=1&limit=10`）
+
+### HTTPステータスコード
+- `200 OK`: 成功（GET、PUT、PATCH）
+- `201 Created`: リソース作成成功（POST）
+- `204 No Content`: 成功かつレスポンスボディなし（DELETE）
+- `400 Bad Request`: 不正なリクエスト
+- `401 Unauthorized`: 認証が必要
+- `403 Forbidden`: 権限不足
+- `404 Not Found`: リソースが見つからない
+- `409 Conflict`: リソースの競合
+- `422 Unprocessable Entity`: バリデーションエラー
+- `500 Internal Server Error`: サーバー内部エラー
+
+## 🔧 実装ルール
+
+### ファイル構造
+```
+server/
+├── index.ts          # メインのHonoアプリケーション
+├── db.ts            # データベースヘルパー関数
+├── types/           # TypeScript型定義
+├── middleware/      # ミドルウェア関数
+├── routes/          # ルートハンドラー（必要に応じて分割）
+└── utils/           # ユーティリティ関数
+```
+
+### エンドポイント実装
+- `server/index.ts`にルートを定義
+- 各エンドポイントは明確な責任を持つ
+- 複雑なロジックは別関数に分離
+
+### データベース操作
+- 必ず`server/db.ts`のヘルパー関数を使用
+- Prismaクエリビルダーを使用してSQLインジェクションを防ぐ
+- 生のSQLクエリは避ける
+- トランザクションが必要な場合は適切に実装
+
+### エラーハンドリング
+```typescript
+// 統一されたエラーレスポンス形式
+interface ErrorResponse {
+  error: {
+    message: string;
+    code?: string;
+    details?: any;
+  };
+}
+
+// エラーハンドリング例
+try {
+  // データベース操作
+} catch (error) {
+  return c.json({
+    error: {
+      message: "Internal server error",
+      code: "DATABASE_ERROR"
+    }
+  }, 500);
+}
+```
+
+### バリデーション
+- 入力値は必ずバリデーションを実装
+- 型安全性を確保するためTypeScriptの型を活用
+- 必要に応じてバリデーションライブラリを使用
+
+## 🔒 セキュリティ
+
+### データベースセキュリティ
+- SQLインジェクション対策：Prismaクエリビルダーの使用
+- パスワードは適切にハッシュ化
+- 機密情報は環境変数で管理
+
+### API セキュリティ
+- CORS設定を適切に実装
+- レート制限の実装を検討
+- 入力値のサニタイゼーション
+- 適切な認証・認可の実装
+
+## ⚡ パフォーマンス
+
+### データベース最適化
+- N+1問題を避けるためincludeを適切に使用
+- インデックスの効果的な使用
+- 不要なデータの取得を避ける
+- ページネーションの実装
+
+### キャッシング
+- 頻繁にアクセスされるデータのキャッシング
+- 適切なキャッシュ無効化戦略
+- メモリリークの防止
+
+## 🧪 テスト
+
+バックエンドテストの詳細については、`.cursor/rules/test-guidelines.mdc`を参照してください。
+
+## 📝 コーディング規約
+
+### TypeScript
+```typescript
+// 型定義の例
+interface User {
+  id: number;
+  name: string;
+  email: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// API レスポンス型の例
+interface ApiResponse<T> {
+  data: T;
+  message?: string;
+}
+
+// エラータイプの例
+interface ApiError {
+  error: {
+    message: string;
+    code?: string;
+  };
+}
+```
+
+### 命名規則
+- 関数名：camelCase（例: `getUserById`）
+- 変数名：camelCase（例: `userId`）
+- 定数：UPPER_SNAKE_CASE（例: `DEFAULT_PAGE_SIZE`）
+- インターフェース：PascalCase（例: `UserInterface`）
+
+### 関数設計
+- 単一責任の原則に従う
+- 純粋関数を優先
+- async/awaitを使用
+- エラーハンドリングを適切に実装
+
+## 🗃️ データベース
+
+### Prismaスキーマ
+- `prisma/schema.prisma`でモデル定義
+- 適切なリレーションシップの定義
+- インデックスの設定
+- デフォルト値の適切な設定
+
+### マイグレーション
+```bash
+# マイグレーション作成
+npx prisma migrate dev --name migration_name
+
+# 本番環境でのマイグレーション
+npx prisma migrate deploy
+```
+
+### クエリ最適化
+```typescript
+// 良い例：必要なフィールドのみ選択
+const user = await prisma.user.findUnique({
+  where: { id: userId },
+  select: {
+    id: true,
+    name: true,
+    email: true
+  }
+});
+
+// 悪い例：全フィールドを取得
+const user = await prisma.user.findUnique({
+  where: { id: userId }
+});
+```
+
+## 🔧 環境設定
+
+### 環境変数
+```env
+# データベース
+DATABASE_URL="file:./data/ice_breakun.db"
+
+# アプリケーション
+PORT=3001
+NODE_ENV=development
+
+# セキュリティ
+JWT_SECRET=your_jwt_secret_here
+```
+
+### 本番環境設定
+- 環境変数の適切な管理
+- ログレベルの設定
+- パフォーマンスモニタリング
+- ヘルスチェックエンドポイントの実装
+
+## 🚨 重要な注意事項
+
+1. **データベース変更**
+   - 必ずPrismaマイグレーションを使用
+   - スキーマ変更前にバックアップを取得
+
+2. **セキュリティ**
+   - 機密情報をコードにハードコードしない
+   - 入力値の検証を怠らない
+   - 適切なエラーメッセージでセンシティブな情報を隠す
+
+3. **パフォーマンス**
+   - データベースクエリの最適化
+   - メモリリークの防止
+   - 適切なログ出力
+
+4. **保守性**
+   - コードの可読性を重視
+   - 適切なコメントの追加
+   - 型安全性の確保
+
+## 📚 参考資料
+- [Hono.js Documentation](https://hono.dev/)
+- [Prisma Documentation](https://www.prisma.io/docs)
+- [TypeScript Handbook](https://www.typescriptlang.org/docs/)
+- [REST API Design Best Practices](https://restfulapi.net/)
+- [テスト開発ガイドライン](./.cursor/rules/test-guidelines.mdc) 
