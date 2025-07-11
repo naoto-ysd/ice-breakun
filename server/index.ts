@@ -227,7 +227,7 @@ messageApi.get('/user/:user_id', async (c) => {
 app.route('/api/v1/messages', messageApi)
 
 // サーバー起動
-const port = 3002
+const port = 3001
 
 try {
   serve({
