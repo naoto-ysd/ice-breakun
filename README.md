@@ -2,142 +2,235 @@
 
 アイスブレイクとチャット機能を備えたWebアプリケーションです。
 
-## 📚 ドキュメント
-
-- [CRUD機能開発ガイド](./docs/CRUD_DEVELOPMENT_GUIDE.md) - 新しいCRUD機能を作成する際の手順
-
 ## 🏗️ 技術スタック
 
 - **フロントエンド**: Nuxt.js 3 / Vue.js 3 / TypeScript
 - **バックエンド**: Hono.js / Node.js
 - **データベース**: SQLite / Prisma ORM
 - **スタイリング**: CSS
+- **インフラ**: Docker / AWS ECS
+- **CI/CD**: GitHub Actions
 
-## 📁 プロジェクト構造
+## 🚀 開発環境構築
 
-```
-ice-breakun/
-├── components/          # Vueコンポーネント
-├── pages/              # ページコンポーネント
-├── server/             # バックエンドAPI
-├── prisma/             # データベーススキーマ
-├── docs/               # ドキュメント
-└── ...
-```
+### 前提条件
 
-## 🚀 セットアップ
+以下のソフトウェアがインストールされている必要があります：
 
-### 依存関係のインストール
+- **Node.js**: v18.0.0 以上
+- **Yarn**: v1.22.0 以上（推奨パッケージマネージャー）
+- **Git**: 最新版
+
+#### Node.js & Yarn のインストール
 
 ```bash
-# npm
-npm install
+# Node.js のバージョン確認
+node --version
 
-# pnpm
-pnpm install
+# Yarn のインストール（npm経由）
+npm install -g yarn
 
-# yarn
+# Yarn のバージョン確認
+yarn --version
+```
+
+### 📦 プロジェクトセットアップ
+
+#### 1. リポジトリのクローン
+
+```bash
+git clone https://github.com/your-username/ice-breakun.git
+cd ice-breakun
+```
+
+#### 2. 依存関係のインストール
+
+```bash
+# パッケージのインストール
 yarn install
 
-# bun
-bun install
+# Prisma クライアントの生成
+yarn prisma generate
 ```
 
-### データベースセットアップ
+#### 3. データベースのセットアップ
 
 ```bash
-# 環境変数設定
-export DATABASE_URL="file:./data/ice_breakun.db"
+# データベースマイグレーションの実行
+yarn prisma migrate dev --name init
 
-# Prismaクライアント生成
-npx prisma generate
-
-# データベースマイグレーション
-npx prisma migrate dev
+# データベースのシード（オプション）
+yarn prisma db seed
 ```
 
-## 🔧 開発サーバー
+#### 4. 環境変数の設定
 
-### フロントエンド（ポート 3000）
+プロジェクトルートに `.env` ファイルを作成し、以下の設定を追加：
+
+```env
+# データベース
+DATABASE_URL="file:./data/ice_breakun.db"
+
+# アプリケーション設定
+NODE_ENV=development
+NUXT_HOST=localhost
+NUXT_PORT=3000
+
+# バックエンド設定
+BACKEND_PORT=3001
+```
+
+### 🎯 アプリケーション起動
+
+#### 🐳 Docker環境での起動（推奨・最も簡単）
+
+**たった1コマンドで開発環境が完成！**
 
 ```bash
-# npm
-npm run dev
+# Docker環境でアプリケーション全体を起動
+docker-compose up --build
+```
 
-# pnpm
-pnpm dev
+以下が自動的に起動・設定されます：
+- ✅ データベースの初期化
+- ✅ フロントエンドサーバー
+- ✅ バックエンドAPI サーバー
 
-# yarn
+起動後のアクセス：
+- **フロントエンド**: http://localhost:3000
+- **バックエンド**: http://localhost:3001
+
+#### Docker環境の停止
+
+```bash
+# Docker環境の停止
+docker-compose down
+
+# ボリュームも含めて完全に削除
+docker-compose down -v
+```
+
+#### ローカル開発環境（手動セットアップ）
+
+個別にサービスを起動したい場合：
+
+1. **バックエンドサーバーの起動**
+
+```bash
+# 別のターミナルでバックエンドを起動
+yarn server:dev
+```
+
+バックエンドが起動したら：http://localhost:3001
+
+2. **フロントエンドサーバーの起動**
+
+```bash
+# メインターミナルでフロントエンドを起動
+yarn dev
+```
+
+フロントエンドが起動したら：http://localhost:3000
+
+### 🛠️ 開発用コマンド
+
+#### 基本コマンド
+
+```bash
+# フロントエンド開発サーバー起動
 yarn dev
 
-# bun
-bun run dev
-```
+# バックエンド開発サーバー起動（ホットリロード）
+yarn server:dev
 
-### バックエンドAPI（ポート 3002）
-
-```bash
-cd server
-npm run dev
-```
-
-## 🌟 機能
-
-- **ユーザー管理**: ユーザーの登録・編集・削除
-- **アイスブレイク**: アイスブレイク質問の管理
-- **チャット機能**: リアルタイムメッセージング（CRUD対応）
-  - メッセージの送信・編集・削除
-  - ユーザー別メッセージ表示
-  - インライン編集機能
-
-## 🚀 本番環境
-
-アプリケーションをプロダクション向けにビルド:
-
-```bash
-# npm
-npm run build
-
-# pnpm
-pnpm build
-
-# yarn
+# 本番ビルド
 yarn build
 
-# bun
-bun run build
+# 本番サーバー起動
+yarn server:build
+
+# プレビュー（本番ビルド後）
+yarn preview
 ```
 
-プロダクションビルドをローカルでプレビュー:
+#### データベース関連
 
 ```bash
-# npm
-npm run preview
+# Prisma Studio（データベース管理画面）
+yarn prisma studio
 
-# pnpm
-pnpm preview
+# データベースリセット
+yarn prisma migrate reset
 
-# yarn
-yarn preview
+# 新しいマイグレーション作成
+yarn prisma migrate dev --name <migration_name>
 
-# bun
-bun run preview
+# Prisma スキーマから型定義を生成
+yarn prisma generate
 ```
 
-## 📖 API エンドポイント
+#### テスト
 
-### ユーザー API
-- `GET /api/v1/users` - ユーザー一覧取得
-- `POST /api/v1/users` - ユーザー作成
-- `PUT /api/v1/users/:id` - ユーザー更新
-- `DELETE /api/v1/users/:id` - ユーザー削除
+```bash
+# テスト実行
+yarn test
 
-### メッセージ API
-- `GET /api/v1/messages` - メッセージ一覧取得
-- `GET /api/v1/messages/:id` - メッセージ個別取得
-- `POST /api/v1/messages` - メッセージ作成
-- `PUT /api/v1/messages/:id` - メッセージ更新
-- `DELETE /api/v1/messages/:id` - メッセージ削除
-- `GET /api/v1/messages/user/:user_id` - ユーザー別メッセージ取得
+# テスト（ウォッチモード）
+yarn test:watch
 
-詳細な開発情報については [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) を参照してください。
+# カバレッジ付きテスト
+yarn test:coverage
+```
+
+#### コード品質
+
+```bash
+# ESLint実行
+yarn lint
+
+# ESLint自動修正
+yarn lint:fix
+
+# 型チェック
+yarn type-check
+```
+
+### 🔧 トラブルシューティング
+
+#### よくある問題と解決方法
+
+**1. ポート競合エラー**
+```bash
+# 使用中のポートを確認
+lsof -i :3000
+lsof -i :3002
+
+# プロセスを終了
+kill -9 <PID>
+```
+
+**2. Prisma関連エラー**
+```bash
+# Prismaクライアント再生成
+yarn prisma generate
+
+# データベースリセット
+yarn prisma migrate reset
+```
+
+**3. Node modules関連エラー**
+```bash
+# node_modulesを削除して再インストール
+rm -rf node_modules yarn.lock
+yarn install
+```
+
+**4. Docker関連エラー**
+```bash
+# Docker環境の完全リセット
+docker-compose down -v
+docker system prune -a
+
+# 再ビルド
+docker-compose up --build
+```
