@@ -1,0 +1,547 @@
+# Ice Breakun フロントエンド開発ガイドライン
+
+## 🎯 概要
+Ice BreakrunプロジェクトのフロントエンドUI開発におけるルールとベストプラクティスです。
+
+## 🏗️ 技術スタック
+- **フレームワーク**: Nuxt.js 3
+- **UI ライブラリ**: Vue.js 3
+- **言語**: TypeScript
+- **スタイリング**: CSS
+- **ビルドツール**: Vite (Nuxt内蔵)
+
+## 📋 Vue.js / Nuxt.js ルール
+
+### Composition API
+```vue
+<script setup lang="ts">
+// 推奨：Composition API + <script setup>記法を使用
+import { ref, computed, onMounted } from 'vue'
+
+// 型定義
+interface User {
+  id: number
+  name: string
+  email: string
+}
+
+// リアクティブデータ
+const users = ref<User[]>([])
+const loading = ref(false)
+
+// コンピューテッドプロパティ
+const activeUsers = computed(() => 
+  users.value.filter(user => user.isActive)
+)
+
+// ライフサイクル
+onMounted(async () => {
+  await fetchUsers()
+})
+</script>
+```
+
+### プロパティとEmits
+```vue
+<script setup lang="ts">
+// プロパティの型定義
+interface Props {
+  userId: number
+  title?: string
+  isVisible?: boolean
+}
+
+// プロパティ
+const props = withDefaults(defineProps<Props>(), {
+  title: 'デフォルトタイトル',
+  isVisible: true
+})
+
+// イベント定義
+interface Emits {
+  (e: 'update', value: string): void
+  (e: 'close'): void
+}
+
+const emit = defineEmits<Emits>()
+
+// イベント発火
+const handleUpdate = (value: string) => {
+  emit('update', value)
+}
+</script>
+```
+
+### コンポーネント設計
+- 単一責任の原則に従う
+- プロパティは必要最小限に限定
+- 親子間の通信は明確に定義
+- 状態管理は適切なスコープで実装
+
+## 📁 ファイル構造とルール
+
+### ディレクトリ構造
+```
+├── pages/              # ページコンポーネント（自動ルーティング）
+│   ├── index.vue      # ホームページ
+│   ├── chat.vue       # チャットページ
+│   ├── icebreak.vue   # アイスブレイクページ
+│   └── users.vue      # ユーザー管理ページ
+├── components/         # 再利用可能なコンポーネント
+│   ├── ChatRoom.vue   # チャットルームコンポーネント
+│   ├── IceBreak.vue   # アイスブレイクコンポーネント
+│   └── UserList.vue   # ユーザーリストコンポーネント
+├── composables/        # Composition関数
+├── utils/             # ユーティリティ関数
+├── types/             # TypeScript型定義
+└── assets/            # 静的リソース
+```
+
+### 命名規則
+- **ページ**: kebab-case（例: `ice-break.vue`）
+- **コンポーネント**: PascalCase（例: `ChatRoom.vue`）
+- **Composables**: use接頭辞 + camelCase（例: `useUserData.ts`）
+- **型定義**: PascalCase + Interface/Type接尾辞（例: `UserInterface`）
+
+### コンポーネント分類
+```vue
+<!-- ページコンポーネント例 -->
+<!-- pages/chat.vue -->
+<template>
+  <div class="chat-page">
+    <ChatRoom :room-id="roomId" />
+    <UserList :users="users" />
+  </div>
+</template>
+
+<!-- 再利用可能コンポーネント例 -->
+<!-- components/ChatRoom.vue -->
+<template>
+  <div class="chat-room">
+    <!-- チャットルーム固有のUI -->
+  </div>
+</template>
+```
+
+## 🎨 スタイリング規約
+
+### CSS設計原則
+- BEM記法またはコンポーネントスコープを使用
+- 再利用可能なスタイルはユーティリティクラスとして定義
+- レスポンシブデザインを考慮
+
+### スタイル実装例
+```vue
+<template>
+  <div class="chat-room">
+    <div class="chat-room__header">
+      <h2 class="chat-room__title">{{ title }}</h2>
+    </div>
+    <div class="chat-room__content">
+      <!-- コンテンツ -->
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.chat-room {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chat-room__header {
+  padding: 1rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.chat-room__title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.chat-room__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+</style>
+```
+
+### レスポンシブ対応
+```css
+/* モバイルファースト */
+.chat-room {
+  padding: 0.5rem;
+}
+
+/* タブレット */
+@media (min-width: 768px) {
+  .chat-room {
+    padding: 1rem;
+  }
+}
+
+/* デスクトップ */
+@media (min-width: 1024px) {
+  .chat-room {
+    padding: 1.5rem;
+  }
+}
+```
+
+## 🔄 状態管理
+
+### リアクティブデータ
+```typescript
+// 単純な状態管理
+const state = reactive({
+  users: [] as User[],
+  loading: false,
+  error: null as string | null
+})
+
+// 複雑な状態はComposables で管理
+export const useUserManagement = () => {
+  const users = ref<User[]>([])
+  const loading = ref(false)
+  
+  const fetchUsers = async () => {
+    loading.value = true
+    try {
+      const response = await $fetch('/api/v1/users')
+      users.value = response.data
+    } catch (error) {
+      console.error('ユーザー取得エラー:', error)
+    } finally {
+      loading.value = false
+    }
+  }
+  
+  return {
+    users: readonly(users),
+    loading: readonly(loading),
+    fetchUsers
+  }
+}
+```
+
+### 状態管理の指針
+- ページレベルの状態：ページコンポーネントで管理
+- アプリケーション全体の状態：Composablesで管理
+- 必要に応じてPiniaの導入を検討
+
+## 🌐 API通信
+
+### $fetchの使用
+```typescript
+// GET リクエスト
+const fetchUsers = async () => {
+  try {
+    const users = await $fetch<User[]>('/api/v1/users')
+    return users
+  } catch (error) {
+    throw new Error('ユーザー取得に失敗しました')
+  }
+}
+
+// POST リクエスト
+const createUser = async (userData: CreateUserRequest) => {
+  try {
+    const newUser = await $fetch<User>('/api/v1/users', {
+      method: 'POST',
+      body: userData
+    })
+    return newUser
+  } catch (error) {
+    throw new Error('ユーザー作成に失敗しました')
+  }
+}
+
+// エラーハンドリング付きComposable
+export const useApi = () => {
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+  
+  const execute = async <T>(apiCall: () => Promise<T>): Promise<T | null> => {
+    loading.value = true
+    error.value = null
+    
+    try {
+      const result = await apiCall()
+      return result
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '不明なエラー'
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+  
+  return { loading, error, execute }
+}
+```
+
+### 型安全なAPI通信
+```typescript
+// API レスポンス型定義
+interface ApiResponse<T> {
+  data: T
+  message?: string
+}
+
+interface User {
+  id: number
+  name: string
+  email: string
+  createdAt: string
+  updatedAt: string
+}
+
+// 型安全なAPI関数
+const fetchUser = async (id: number): Promise<User> => {
+  const response = await $fetch<ApiResponse<User>>(`/api/v1/users/${id}`)
+  return response.data
+}
+```
+
+## 🧪 テスト
+
+フロントエンドテストの詳細については、`.cursor/rules/test-guidelines.mdc`を参照してください。
+
+## ⚡ パフォーマンス最適化
+
+### 画像最適化
+```vue
+<template>
+  <!-- Nuxt Imageコンポーネント使用 -->
+  <NuxtImg
+    src="/images/user-avatar.jpg"
+    alt="ユーザーアバター"
+    width="64"
+    height="64"
+    loading="lazy"
+    sizes="sm:64px md:96px lg:128px"
+  />
+</template>
+```
+
+### 遅延読み込み
+```vue
+<script setup lang="ts">
+// Lazy Componentの使用
+const LazyUserList = defineAsyncComponent(() => import('~/components/UserList.vue'))
+
+// 条件付きレンダリング
+const showUserList = ref(false)
+
+onMounted(() => {
+  // 必要なタイミングでコンポーネントを読み込み
+  nextTick(() => {
+    showUserList.value = true
+  })
+})
+</script>
+
+<template>
+  <div>
+    <LazyUserList v-if="showUserList" />
+  </div>
+</template>
+```
+
+### メモ化とキャッシング
+```typescript
+// computed プロパティの活用
+const filteredUsers = computed(() => {
+  return users.value.filter(user => 
+    user.name.toLowerCase().includes(searchQuery.value.toLowerCase())
+  )
+})
+
+// watchで最適化
+watch(
+  () => props.userId,
+  async (newUserId) => {
+    if (newUserId) {
+      await fetchUserData(newUserId)
+    }
+  },
+  { immediate: true }
+)
+```
+
+## 🛡️ セキュリティ
+
+### XSS対策
+```vue
+<template>
+  <!-- 安全：自動エスケープ -->
+  <p>{{ userInput }}</p>
+  
+  <!-- 危険：v-htmlは避ける -->
+  <!-- <p v-html="userInput"></p> -->
+  
+  <!-- 必要な場合はサニタイズ -->
+  <p v-html="sanitizedHtml"></p>
+</template>
+
+<script setup lang="ts">
+import DOMPurify from 'dompurify'
+
+const sanitizedHtml = computed(() => {
+  return DOMPurify.sanitize(props.htmlContent)
+})
+</script>
+```
+
+### 入力値検証
+```vue
+<script setup lang="ts">
+// フォームバリデーション
+const form = reactive({
+  email: '',
+  password: ''
+})
+
+const errors = reactive({
+  email: '',
+  password: ''
+})
+
+const validateEmail = (email: string): boolean => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  return emailRegex.test(email)
+}
+
+const validateForm = (): boolean => {
+  errors.email = ''
+  errors.password = ''
+  
+  if (!validateEmail(form.email)) {
+    errors.email = '有効なメールアドレスを入力してください'
+  }
+  
+  if (form.password.length < 8) {
+    errors.password = 'パスワードは8文字以上で入力してください'
+  }
+  
+  return !errors.email && !errors.password
+}
+</script>
+```
+
+## 🌍 国際化（i18n）
+
+### 多言語対応準備
+```typescript
+// 将来の国際化対応を考慮した文字列管理
+const messages = {
+  welcome: 'Ice Breakunへようこそ',
+  chat: {
+    title: 'チャット',
+    sendMessage: 'メッセージを送信',
+    placeholder: 'メッセージを入力...'
+  },
+  user: {
+    login: 'ログイン',
+    logout: 'ログアウト',
+    profile: 'プロフィール'
+  }
+}
+```
+
+## 📱 アクセシビリティ
+
+### WAI-ARIA対応
+```vue
+<template>
+  <div class="chat-room" role="main" aria-label="チャットルーム">
+    <h1 id="room-title">{{ roomTitle }}</h1>
+    
+    <div 
+      class="message-list"
+      role="log"
+      aria-live="polite"
+      aria-labelledby="room-title"
+    >
+      <div 
+        v-for="message in messages"
+        :key="message.id"
+        class="message"
+        role="article"
+      >
+        {{ message.content }}
+      </div>
+    </div>
+    
+    <form @submit.prevent="sendMessage" aria-label="メッセージ送信">
+      <input
+        v-model="messageInput"
+        type="text"
+        placeholder="メッセージを入力..."
+        aria-label="メッセージ入力"
+        required
+      />
+      <button type="submit" aria-label="メッセージ送信">
+        送信
+      </button>
+    </form>
+  </div>
+</template>
+```
+
+### キーボードナビゲーション
+```vue
+<script setup lang="ts">
+// キーボードイベントハンドリング
+const handleKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Enter' && event.ctrlKey) {
+    sendMessage()
+  }
+  
+  if (event.key === 'Escape') {
+    closeModal()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
+})
+</script>
+```
+
+## 🚨 重要な注意事項
+
+1. **型安全性**
+   - 必ずTypeScriptの型定義を活用
+   - anyの使用は最小限に抑制
+   - プロパティとイベントには明確な型を定義
+
+2. **パフォーマンス**
+   - 不要なリアクティブプロパティは避ける
+   - 大きなリストは仮想スクロールを検討
+   - 画像は適切に最適化
+
+3. **保守性**
+   - コンポーネントは単一責任を保つ
+   - 複雑なロジックはComposablesに分離
+   - プロパティは最小限に限定
+
+4. **ユーザビリティ**
+   - ローディング状態を適切に表示
+   - エラーメッセージは分かりやすく
+   - レスポンシブデザインを確保
+
+## 📚 参考資料
+- [Nuxt.js 3 Documentation](https://nuxt.com/docs)
+- [Vue.js 3 Documentation](https://vuejs.org/)
+- [TypeScript Handbook](https://www.typescriptlang.org/docs/)
+- [Vue.js Style Guide](https://vuejs.org/style-guide/)
+- [Web Accessibility Guidelines](https://www.w3.org/WAI/WCAG21/quickref/)
+- [テスト開発ガイドライン](./.cursor/rules/test-guidelines.mdc) 

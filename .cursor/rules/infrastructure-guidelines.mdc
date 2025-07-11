@@ -1,0 +1,1263 @@
+---
+alwaysApply: true
+---
+
+# Ice Breakun インフラストラクチャ開発ガイドライン
+
+## 🎯 概要
+Ice Breakunプロジェクトのインフラストラクチャ構築・運用におけるルールとベストプラクティスです。
+
+## 🏗️ インフラ技術スタック
+- **コンテナ化**: Docker, Docker Compose
+- **オーケストレーション**: AWS ECS (Fargate)
+- **Infrastructure as Code**: Terraform
+- **CI/CD**: GitHub Actions
+- **クラウドプロバイダー**: AWS
+- **レジストリ**: Amazon ECR
+
+## 🐳 Docker構成
+
+### ファイル構成
+```
+├── Dockerfile              # フロントエンド本番用
+├── Dockerfile.prod         # フロントエンド本番用（最適化版）
+├── Dockerfile.backend      # バックエンド開発用
+├── Dockerfile.backend.prod # バックエンド本番用
+└── docker-compose.yml     # ローカル開発環境
+```
+
+### 開発環境（docker-compose.yml）
+```yaml
+# 推奨構成例
+version: '3.8'
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=file:./data/ice_breakun.db
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./data:/app/data
+```
+
+### マルチステージビルド原則
+```dockerfile
+# 本番用Dockerfile例
+FROM node:18-alpine as base
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+
+FROM node:18-alpine as build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:18-alpine as production
+WORKDIR /app
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=build /app/.output ./.output
+COPY --from=build /app/package.json ./
+
+EXPOSE 3000
+CMD ["node", ".output/server/index.mjs"]
+```
+
+### Docker最適化ルール
+1. **イメージサイズ最適化**
+   - Alpine Linuxベースイメージの使用
+   - 不要なファイルは`.dockerignore`で除外
+   - マルチステージビルドの活用
+
+2. **レイヤーキャッシュ最適化**
+   - package.jsonを先にコピーしてnpm installを実行
+   - 変更頻度の低いファイルを先にコピー
+
+3. **セキュリティ**
+   - 非rootユーザーでの実行
+   - 必要最小限の権限設定
+   - 機密情報はビルド時に埋め込まない
+
+## ☁️ AWS ECS構成
+
+### Terraform設定（ecs.tf）
+```hcl
+# ECSクラスター
+resource "aws_ecs_cluster" "ice_breakun" {
+  name = "ice-breakun-cluster"
+  
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+  
+  tags = {
+    Environment = var.environment
+    Project     = "ice-breakun"
+  }
+}
+
+# ECSサービス
+resource "aws_ecs_service" "frontend" {
+  name            = "ice-breakun-frontend"
+  cluster         = aws_ecs_cluster.ice_breakun.id
+  task_definition = aws_ecs_task_definition.frontend.arn
+  desired_count   = var.frontend_desired_count
+  launch_type     = "FARGATE"
+  
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs.id]
+    assign_public_ip = false
+  }
+  
+  load_balancer {
+    target_group_arn = aws_lb_target_group.frontend.arn
+    container_name   = "frontend"
+    container_port   = 3000
+  }
+}
+
+# タスク定義
+resource "aws_ecs_task_definition" "frontend" {
+  family                   = "ice-breakun-frontend"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = var.frontend_cpu
+  memory                   = var.frontend_memory
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn           = aws_iam_role.ecs_task.arn
+  
+  container_definitions = jsonencode([
+    {
+      name  = "frontend"
+      image = "${var.ecr_repository_url}:${var.image_tag}"
+      portMappings = [
+        {
+          containerPort = 3000
+          protocol      = "tcp"
+        }
+      ]
+      environment = [
+        {
+          name  = "NODE_ENV"
+          value = var.environment
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.ecs.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "frontend"
+        }
+      }
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 60
+      }
+    }
+  ])
+}
+```
+
+### ネットワーク設定
+```hcl
+# セキュリティグループ
+resource "aws_security_group" "ecs" {
+  name_prefix = "ice-breakun-ecs-"
+  vpc_id      = var.vpc_id
+  
+  ingress {
+    from_port       = 3000
+    to_port         = 3000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+  
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
+  tags = {
+    Name = "ice-breakun-ecs-sg"
+  }
+}
+
+# Application Load Balancer
+resource "aws_lb" "main" {
+  name               = "ice-breakun-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = var.public_subnet_ids
+  
+  enable_deletion_protection = var.enable_deletion_protection
+  
+  tags = {
+    Environment = var.environment
+  }
+}
+```
+
+### 監視・ログ設定
+```hcl
+# CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "ecs" {
+  name              = "/ecs/ice-breakun"
+  retention_in_days = var.log_retention_days
+  
+  tags = {
+    Environment = var.environment
+  }
+}
+
+# CloudWatch Alarms
+resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  alarm_name          = "ice-breakun-cpu-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/ECS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "80"
+  alarm_description   = "This metric monitors ecs cpu utilization"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  
+  dimensions = {
+    ServiceName = aws_ecs_service.frontend.name
+    ClusterName = aws_ecs_cluster.ice_breakun.name
+  }
+}
+```
+
+## 🚀 CI/CDパイプライン
+
+### GitHub Actions設定
+```yaml
+# .github/workflows/deploy-to-ecr.yml
+name: Deploy to ECR and ECS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: ap-northeast-1
+  ECR_REPOSITORY: ice-breakun
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run tests
+        run: npm test
+      
+      - name: Run linting
+        run: npm run lint
+      
+      - name: Run type checking
+        run: npm run type-check
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Build, tag, and push frontend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f Dockerfile.prod -t $ECR_REGISTRY/$ECR_REPOSITORY:frontend-$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:frontend-$IMAGE_TAG
+      
+      - name: Build, tag, and push backend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f Dockerfile.backend.prod -t $ECR_REGISTRY/$ECR_REPOSITORY:backend-$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:backend-$IMAGE_TAG
+      
+      - name: Deploy to ECS
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          aws ecs update-service \
+            --cluster ice-breakun-cluster \
+            --service ice-breakun-frontend \
+            --force-new-deployment
+```
+
+### デプロイメント戦略
+1. **Blue/Green デプロイメント**
+   - ECSサービスの段階的更新
+   - ヘルスチェックによる自動ロールバック
+
+2. **ゼロダウンタイムデプロイ**
+   - ALBによるトラフィック制御
+   - グレースフルシャットダウン
+
+3. **ロールバック戦略**
+   - 以前のタスク定義への即座の復元
+   - データベースマイグレーションの考慮
+
+## 🔧 環境管理
+
+### 環境分離
+```hcl
+# 環境別変数設定
+variable "environment" {
+  description = "Environment name"
+  type        = string
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be dev, staging, or prod."
+  }
+}
+
+variable "frontend_desired_count" {
+  description = "Desired number of frontend tasks"
+  type        = number
+  default = {
+    dev     = 1
+    staging = 1
+    prod    = 2
+  }
+}
+
+variable "frontend_cpu" {
+  description = "CPU units for frontend tasks"
+  type        = number
+  default = {
+    dev     = 256
+    staging = 512
+    prod    = 1024
+  }
+}
+```
+
+### シークレット管理
+```hcl
+# AWS Systems Manager Parameter Store
+resource "aws_ssm_parameter" "database_url" {
+  name  = "/ice-breakun/${var.environment}/database-url"
+  type  = "SecureString"
+  value = var.database_url
+  
+  tags = {
+    Environment = var.environment
+  }
+}
+
+# ECSタスク定義でのシークレット参照
+container_definitions = jsonencode([
+  {
+    name = "backend"
+    secrets = [
+      {
+        name      = "DATABASE_URL"
+        valueFrom = aws_ssm_parameter.database_url.arn
+      }
+    ]
+  }
+])
+```
+
+## 📊 監視・アラート
+
+### CloudWatch メトリクス
+```hcl
+# カスタムメトリクス
+resource "aws_cloudwatch_metric_alarm" "response_time" {
+  alarm_name          = "ice-breakun-response-time"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "TargetResponseTime"
+  namespace           = "AWS/ApplicationELB"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "5"
+  alarm_description   = "Response time is too high"
+  
+  dimensions = {
+    LoadBalancer = aws_lb.main.arn_suffix
+  }
+}
+
+# エラー率監視
+resource "aws_cloudwatch_metric_alarm" "error_rate" {
+  alarm_name          = "ice-breakun-error-rate"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "3"
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "10"
+  alarm_description   = "5xx error rate is too high"
+}
+```
+
+### ログ管理
+```json
+{
+  "logConfiguration": {
+    "logDriver": "awslogs",
+    "options": {
+      "awslogs-group": "/ecs/ice-breakun",
+      "awslogs-region": "ap-northeast-1",
+      "awslogs-stream-prefix": "ecs",
+      "awslogs-datetime-format": "%Y-%m-%d %H:%M:%S"
+    }
+  }
+}
+```
+
+## 🔒 セキュリティ
+
+### IAM設定
+```hcl
+# ECS実行ロール
+resource "aws_iam_role" "ecs_execution" {
+  name = "ice-breakun-ecs-execution-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_execution" {
+  role       = aws_iam_role.ecs_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# ECSタスクロール
+resource "aws_iam_role" "ecs_task" {
+  name = "ice-breakun-ecs-task-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+```
+
+### ネットワークセキュリティ
+1. **プライベートサブネット**
+   - ECSタスクはプライベートサブネットで実行
+   - NATゲートウェイ経由でのアウトバウンド通信
+
+2. **セキュリティグループ**
+   - 最小権限の原則
+   - ポート3000のみALBからのアクセス許可
+
+3. **WAF設定**
+   - SQL インジェクション対策
+   - XSS攻撃対策
+   - DDoS攻撃対策
+
+## 🏃‍♂️ 運用ベストプラクティス
+
+### デプロイメント手順
+1. **事前チェック**
+   ```bash
+   # Terraformプランの確認
+   terraform plan -var-file="environments/prod.tfvars"
+   
+   # Docker イメージのビルドテスト
+   docker build -f Dockerfile.prod .
+   ```
+
+2. **段階的デプロイ**
+   ```bash
+   # ステージング環境でのテスト
+   terraform apply -var-file="environments/staging.tfvars"
+   
+   # 本番環境デプロイ
+   terraform apply -var-file="environments/prod.tfvars"
+   ```
+
+3. **ヘルスチェック**
+   ```bash
+   # ECSサービスの状態確認
+   aws ecs describe-services --cluster ice-breakun-cluster --services ice-breakun-frontend
+   
+   # ALBのターゲット状態確認
+   aws elbv2 describe-target-health --target-group-arn <TARGET_GROUP_ARN>
+   ```
+
+### スケーリング戦略
+```hcl
+# Auto Scaling設定
+resource "aws_appautoscaling_target" "ecs_target" {
+  max_capacity       = var.max_capacity
+  min_capacity       = var.min_capacity
+  resource_id        = "service/${aws_ecs_cluster.ice_breakun.name}/${aws_ecs_service.frontend.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "cpu_policy" {
+  name               = "ice-breakun-cpu-scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.ecs_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.ecs_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.ecs_target.service_namespace
+  
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value = 70.0
+  }
+}
+```
+
+### バックアップ・災害復旧
+1. **データベースバックアップ**
+   - 自動スナップショット（RDS使用時）
+   - 定期的なバックアップスクリプト
+
+2. **設定のバージョン管理**
+   - Terraformステートファイルのリモート管理
+   - 設定変更の履歴管理
+
+3. **災害復旧計画**
+   - 別リージョンでの復旧手順
+   - RPO/RTOの設定
+
+## 🚨 重要な注意事項
+
+1. **コスト最適化**
+   - 適切なインスタンスサイズの選択
+   - スケジュールベースのスケーリング
+   - 不要なリソースの定期的な削除
+
+2. **セキュリティ**
+   - 定期的なセキュリティパッチ適用
+   - IAMロールの最小権限設定
+   - シークレット情報の適切な管理
+
+3. **監視**
+   - 重要なメトリクスの継続的な監視
+   - アラート設定の最適化
+   - ログの定期的な分析
+
+4. **パフォーマンス**
+   - リソース使用量の定期的な見直し
+   - ボトルネックの特定と改善
+   - キャッシュ戦略の最適化
+
+## 📚 参考資料
+- [AWS ECS Documentation](https://docs.aws.amazon.com/ecs/)
+- [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+- [Docker Best Practices](https://docs.docker.com/develop/dev-best-practices/)
+- [GitHub Actions Documentation](https://docs.github.com/en/actions)
+- [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/) # Ice Breakun インフラストラクチャ開発ガイドライン
+
+## 🎯 概要
+Ice Breakunプロジェクトのインフラストラクチャ構築・運用におけるルールとベストプラクティスです。
+
+## 🏗️ インフラ技術スタック
+- **コンテナ化**: Docker, Docker Compose
+- **オーケストレーション**: AWS ECS (Fargate)
+- **Infrastructure as Code**: Terraform
+- **CI/CD**: GitHub Actions
+- **クラウドプロバイダー**: AWS
+- **レジストリ**: Amazon ECR
+
+## 🐳 Docker構成
+
+### ファイル構成
+```
+├── Dockerfile              # フロントエンド本番用
+├── Dockerfile.prod         # フロントエンド本番用（最適化版）
+├── Dockerfile.backend      # バックエンド開発用
+├── Dockerfile.backend.prod # バックエンド本番用
+└── docker-compose.yml     # ローカル開発環境
+```
+
+### 開発環境（docker-compose.yml）
+```yaml
+# 推奨構成例
+version: '3.8'
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=file:./data/ice_breakun.db
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./data:/app/data
+```
+
+### マルチステージビルド原則
+```dockerfile
+# 本番用Dockerfile例
+FROM node:18-alpine as base
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+
+FROM node:18-alpine as build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:18-alpine as production
+WORKDIR /app
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=build /app/.output ./.output
+COPY --from=build /app/package.json ./
+
+EXPOSE 3000
+CMD ["node", ".output/server/index.mjs"]
+```
+
+### Docker最適化ルール
+1. **イメージサイズ最適化**
+   - Alpine Linuxベースイメージの使用
+   - 不要なファイルは`.dockerignore`で除外
+   - マルチステージビルドの活用
+
+2. **レイヤーキャッシュ最適化**
+   - package.jsonを先にコピーしてnpm installを実行
+   - 変更頻度の低いファイルを先にコピー
+
+3. **セキュリティ**
+   - 非rootユーザーでの実行
+   - 必要最小限の権限設定
+   - 機密情報はビルド時に埋め込まない
+
+## ☁️ AWS ECS構成
+
+### Terraform設定（ecs.tf）
+```hcl
+# ECSクラスター
+resource "aws_ecs_cluster" "ice_breakun" {
+  name = "ice-breakun-cluster"
+  
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+  
+  tags = {
+    Environment = var.environment
+    Project     = "ice-breakun"
+  }
+}
+
+# ECSサービス
+resource "aws_ecs_service" "frontend" {
+  name            = "ice-breakun-frontend"
+  cluster         = aws_ecs_cluster.ice_breakun.id
+  task_definition = aws_ecs_task_definition.frontend.arn
+  desired_count   = var.frontend_desired_count
+  launch_type     = "FARGATE"
+  
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.ecs.id]
+    assign_public_ip = false
+  }
+  
+  load_balancer {
+    target_group_arn = aws_lb_target_group.frontend.arn
+    container_name   = "frontend"
+    container_port   = 3000
+  }
+}
+
+# タスク定義
+resource "aws_ecs_task_definition" "frontend" {
+  family                   = "ice-breakun-frontend"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = var.frontend_cpu
+  memory                   = var.frontend_memory
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn           = aws_iam_role.ecs_task.arn
+  
+  container_definitions = jsonencode([
+    {
+      name  = "frontend"
+      image = "${var.ecr_repository_url}:${var.image_tag}"
+      portMappings = [
+        {
+          containerPort = 3000
+          protocol      = "tcp"
+        }
+      ]
+      environment = [
+        {
+          name  = "NODE_ENV"
+          value = var.environment
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.ecs.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "frontend"
+        }
+      }
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 60
+      }
+    }
+  ])
+}
+```
+
+### ネットワーク設定
+```hcl
+# セキュリティグループ
+resource "aws_security_group" "ecs" {
+  name_prefix = "ice-breakun-ecs-"
+  vpc_id      = var.vpc_id
+  
+  ingress {
+    from_port       = 3000
+    to_port         = 3000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+  
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
+  tags = {
+    Name = "ice-breakun-ecs-sg"
+  }
+}
+
+# Application Load Balancer
+resource "aws_lb" "main" {
+  name               = "ice-breakun-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = var.public_subnet_ids
+  
+  enable_deletion_protection = var.enable_deletion_protection
+  
+  tags = {
+    Environment = var.environment
+  }
+}
+```
+
+### 監視・ログ設定
+```hcl
+# CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "ecs" {
+  name              = "/ecs/ice-breakun"
+  retention_in_days = var.log_retention_days
+  
+  tags = {
+    Environment = var.environment
+  }
+}
+
+# CloudWatch Alarms
+resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  alarm_name          = "ice-breakun-cpu-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/ECS"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "80"
+  alarm_description   = "This metric monitors ecs cpu utilization"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  
+  dimensions = {
+    ServiceName = aws_ecs_service.frontend.name
+    ClusterName = aws_ecs_cluster.ice_breakun.name
+  }
+}
+```
+
+## 🚀 CI/CDパイプライン
+
+### GitHub Actions設定
+```yaml
+# .github/workflows/deploy-to-ecr.yml
+name: Deploy to ECR and ECS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: ap-northeast-1
+  ECR_REPOSITORY: ice-breakun
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run tests
+        run: npm test
+      
+      - name: Run linting
+        run: npm run lint
+      
+      - name: Run type checking
+        run: npm run type-check
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Build, tag, and push frontend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f Dockerfile.prod -t $ECR_REGISTRY/$ECR_REPOSITORY:frontend-$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:frontend-$IMAGE_TAG
+      
+      - name: Build, tag, and push backend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f Dockerfile.backend.prod -t $ECR_REGISTRY/$ECR_REPOSITORY:backend-$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:backend-$IMAGE_TAG
+      
+      - name: Deploy to ECS
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          aws ecs update-service \
+            --cluster ice-breakun-cluster \
+            --service ice-breakun-frontend \
+            --force-new-deployment
+```
+
+### デプロイメント戦略
+1. **Blue/Green デプロイメント**
+   - ECSサービスの段階的更新
+   - ヘルスチェックによる自動ロールバック
+
+2. **ゼロダウンタイムデプロイ**
+   - ALBによるトラフィック制御
+   - グレースフルシャットダウン
+
+3. **ロールバック戦略**
+   - 以前のタスク定義への即座の復元
+   - データベースマイグレーションの考慮
+
+## 🔧 環境管理
+
+### 環境分離
+```hcl
+# 環境別変数設定
+variable "environment" {
+  description = "Environment name"
+  type        = string
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be dev, staging, or prod."
+  }
+}
+
+variable "frontend_desired_count" {
+  description = "Desired number of frontend tasks"
+  type        = number
+  default = {
+    dev     = 1
+    staging = 1
+    prod    = 2
+  }
+}
+
+variable "frontend_cpu" {
+  description = "CPU units for frontend tasks"
+  type        = number
+  default = {
+    dev     = 256
+    staging = 512
+    prod    = 1024
+  }
+}
+```
+
+### シークレット管理
+```hcl
+# AWS Systems Manager Parameter Store
+resource "aws_ssm_parameter" "database_url" {
+  name  = "/ice-breakun/${var.environment}/database-url"
+  type  = "SecureString"
+  value = var.database_url
+  
+  tags = {
+    Environment = var.environment
+  }
+}
+
+# ECSタスク定義でのシークレット参照
+container_definitions = jsonencode([
+  {
+    name = "backend"
+    secrets = [
+      {
+        name      = "DATABASE_URL"
+        valueFrom = aws_ssm_parameter.database_url.arn
+      }
+    ]
+  }
+])
+```
+
+## 📊 監視・アラート
+
+### CloudWatch メトリクス
+```hcl
+# カスタムメトリクス
+resource "aws_cloudwatch_metric_alarm" "response_time" {
+  alarm_name          = "ice-breakun-response-time"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "TargetResponseTime"
+  namespace           = "AWS/ApplicationELB"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "5"
+  alarm_description   = "Response time is too high"
+  
+  dimensions = {
+    LoadBalancer = aws_lb.main.arn_suffix
+  }
+}
+
+# エラー率監視
+resource "aws_cloudwatch_metric_alarm" "error_rate" {
+  alarm_name          = "ice-breakun-error-rate"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "3"
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = "300"
+  statistic           = "Sum"
+  threshold           = "10"
+  alarm_description   = "5xx error rate is too high"
+}
+```
+
+### ログ管理
+```json
+{
+  "logConfiguration": {
+    "logDriver": "awslogs",
+    "options": {
+      "awslogs-group": "/ecs/ice-breakun",
+      "awslogs-region": "ap-northeast-1",
+      "awslogs-stream-prefix": "ecs",
+      "awslogs-datetime-format": "%Y-%m-%d %H:%M:%S"
+    }
+  }
+}
+```
+
+## 🔒 セキュリティ
+
+### IAM設定
+```hcl
+# ECS実行ロール
+resource "aws_iam_role" "ecs_execution" {
+  name = "ice-breakun-ecs-execution-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_execution" {
+  role       = aws_iam_role.ecs_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# ECSタスクロール
+resource "aws_iam_role" "ecs_task" {
+  name = "ice-breakun-ecs-task-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+```
+
+### ネットワークセキュリティ
+1. **プライベートサブネット**
+   - ECSタスクはプライベートサブネットで実行
+   - NATゲートウェイ経由でのアウトバウンド通信
+
+2. **セキュリティグループ**
+   - 最小権限の原則
+   - ポート3000のみALBからのアクセス許可
+
+3. **WAF設定**
+   - SQL インジェクション対策
+   - XSS攻撃対策
+   - DDoS攻撃対策
+
+## 🏃‍♂️ 運用ベストプラクティス
+
+### デプロイメント手順
+1. **事前チェック**
+   ```bash
+   # Terraformプランの確認
+   terraform plan -var-file="environments/prod.tfvars"
+   
+   # Docker イメージのビルドテスト
+   docker build -f Dockerfile.prod .
+   ```
+
+2. **段階的デプロイ**
+   ```bash
+   # ステージング環境でのテスト
+   terraform apply -var-file="environments/staging.tfvars"
+   
+   # 本番環境デプロイ
+   terraform apply -var-file="environments/prod.tfvars"
+   ```
+
+3. **ヘルスチェック**
+   ```bash
+   # ECSサービスの状態確認
+   aws ecs describe-services --cluster ice-breakun-cluster --services ice-breakun-frontend
+   
+   # ALBのターゲット状態確認
+   aws elbv2 describe-target-health --target-group-arn <TARGET_GROUP_ARN>
+   ```
+
+### スケーリング戦略
+```hcl
+# Auto Scaling設定
+resource "aws_appautoscaling_target" "ecs_target" {
+  max_capacity       = var.max_capacity
+  min_capacity       = var.min_capacity
+  resource_id        = "service/${aws_ecs_cluster.ice_breakun.name}/${aws_ecs_service.frontend.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "cpu_policy" {
+  name               = "ice-breakun-cpu-scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.ecs_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.ecs_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.ecs_target.service_namespace
+  
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value = 70.0
+  }
+}
+```
+
+### バックアップ・災害復旧
+1. **データベースバックアップ**
+   - 自動スナップショット（RDS使用時）
+   - 定期的なバックアップスクリプト
+
+2. **設定のバージョン管理**
+   - Terraformステートファイルのリモート管理
+   - 設定変更の履歴管理
+
+3. **災害復旧計画**
+   - 別リージョンでの復旧手順
+   - RPO/RTOの設定
+
+## 🚨 重要な注意事項
+
+1. **コスト最適化**
+   - 適切なインスタンスサイズの選択
+   - スケジュールベースのスケーリング
+   - 不要なリソースの定期的な削除
+
+2. **セキュリティ**
+   - 定期的なセキュリティパッチ適用
+   - IAMロールの最小権限設定
+   - シークレット情報の適切な管理
+
+3. **監視**
+   - 重要なメトリクスの継続的な監視
+   - アラート設定の最適化
+   - ログの定期的な分析
+
+4. **パフォーマンス**
+   - リソース使用量の定期的な見直し
+   - ボトルネックの特定と改善
+   - キャッシュ戦略の最適化
+
+## 📚 参考資料
+- [AWS ECS Documentation](https://docs.aws.amazon.com/ecs/)
+- [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+- [Docker Best Practices](https://docs.docker.com/develop/dev-best-practices/)
+- [GitHub Actions Documentation](https://docs.github.com/en/actions)
+- [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/) 

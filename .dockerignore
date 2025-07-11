@@ -10,3 +10,15 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 Thumbs.db
+*.md
+.vscode
+.idea
+coverage
+dist
+build
+.cache
+.temp
+.tmp
+*.log
+.eslintcache
+.nyc_output
