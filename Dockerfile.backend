@@ -1,9 +1,9 @@
-FROM node:20-alpine AS deps
+FROM node:20-slim AS deps
 WORKDIR /app
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --cache-folder .yarn/cache && yarn cache clean
 
-FROM node:20-alpine AS prisma-setup
+FROM node:20-slim AS prisma-setup
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY prisma/ ./prisma/
@@ -11,15 +11,32 @@ COPY package.json ./
 ENV DATABASE_URL="file:/app/prisma/data/ice_breakun.db"
 RUN npx prisma generate
 
-FROM node:20-alpine AS runtime
+FROM node:20-slim AS runtime
 WORKDIR /app
+
+# wgetをインストール（healthcheck用）
+RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=prisma-setup /app/node_modules/.prisma ./node_modules/.prisma
 COPY server/ ./server/
 COPY prisma/ ./prisma/
 COPY tsconfig.json ./
 COPY package.json ./
+
+# データベースディレクトリを作成
+RUN mkdir -p /app/prisma/data
+
 ENV DATABASE_URL="file:/app/prisma/data/ice_breakun.db"
-RUN npx prisma db push && rm -rf /tmp/* /var/cache/apk/* /root/.cache
-EXPOSE 3002
-CMD ["yarn", "server:dev"]               
+ENV PORT=3001
+
+EXPOSE 3001
+
+# 起動スクリプトを作成
+RUN echo '#!/bin/sh\n\
+  echo "Initializing database..."\n\
+  npx prisma db push\n\
+  echo "Starting server..."\n\
+  yarn server:dev' > /app/start.sh && chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]               
